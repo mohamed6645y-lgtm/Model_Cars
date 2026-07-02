@@ -4,6 +4,9 @@ import numpy as np
 import re
 import datetime
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
+import joblib
+import json
+import os
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
@@ -87,9 +90,8 @@ def build_pipeline(numeric_features, categorical_features):
     
     return pipeline
 
-def train_model(X, y, pipeline):
-    """Splits data and trains the model using RandomizedSearchCV for hyperparameter tuning."""
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+def train_model(X_train, y_train, pipeline):
+    """Trains the model using RandomizedSearchCV for hyperparameter tuning."""
 
     # Define the parameter distribution for RandomizedSearchCV
     param_dist = {
@@ -118,11 +120,7 @@ def train_model(X, y, pipeline):
     print(f"Best parameters found: {search.best_params_}", flush=True)
     best_model = search.best_estimator_
     
-    print("Evaluating model on the test set...", flush=True)
-    score = best_model.score(X_test, y_test)
-    print(f"Optimized Model R^2 Score on Test Set: {score:.4f}", flush=True)
-    
-    return best_model, X_train, X_test, y_train, y_test
+    return best_model
 
 def evaluate_predictions(model, X_test, y_test, image_map_df=None):
     """Makes predictions and evaluates them based on a percentage difference."""
@@ -134,6 +132,11 @@ def evaluate_predictions(model, X_test, y_test, image_map_df=None):
     # Check if 'id' column exists in the test set before making predictions.
     if 'id' not in X_test_copy.columns:
         raise KeyError("'id' column not found in X_test. It was likely dropped during preprocessing.")
+
+    print("Evaluating model on the test set...", flush=True)
+    score = model.score(X_test, y_test)
+    print(f"Model R^2 Score on Test Set: {score:.4f}", flush=True)
+
 
     predictions = model.predict(X_test)
 
@@ -214,6 +217,10 @@ def predict_new_car(model, train_columns, car_details):
 if __name__ == "__main__":
     print("Script started...", flush=True)
 
+    # Define paths for model and columns
+    MODEL_PATH = 'car_price_model.pkl'
+    COLUMNS_PATH = 'model_columns.json'
+
     # 1. Load and prepare data
     print("Step 1: Loading and cleaning data...", flush=True)
     df, target_col, year_col = load_and_clean_data("car_ads_details_kaggle.csv")
@@ -235,11 +242,32 @@ if __name__ == "__main__":
     print(f"Found {len(numeric_cols)} numeric features and {len(categorical_cols)} categorical features.", flush=True)
     print("Step 3 complete.", flush=True)
 
-    # 4. Build and train model
-    print("Step 4: Building pipeline and training model...", flush=True)
-    pipeline = build_pipeline(numeric_cols, categorical_cols)
-    model, X_train, X_test, y_train, y_test = train_model(X, y, pipeline)
+    # 4. Split data before model training/loading
+    print("Step 4: Splitting data...", flush=True)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     print("Step 4 complete.", flush=True)
+
+    # 5. Train or Load Model
+    if os.path.exists(MODEL_PATH):
+        print(f"--- Loading existing model from {MODEL_PATH} ---", flush=True)
+        model = joblib.load(MODEL_PATH)
+        print("Model loaded successfully.", flush=True)
+    else:
+        print(f"--- Model not found. Starting new training... ---", flush=True)
+        # Build pipeline
+        pipeline = build_pipeline(numeric_cols, categorical_cols)
+        
+        # Train model
+        model = train_model(X_train, y_train, pipeline)
+        
+        # Save the trained model
+        print(f"Saving model to {MODEL_PATH}...", flush=True)
+        joblib.dump(model, MODEL_PATH)
+        
+        # Save the training columns for the backend
+        print(f"Saving feature columns to {COLUMNS_PATH}...", flush=True)
+        with open(COLUMNS_PATH, 'w') as f:
+            json.dump(X_train.columns.tolist(), f, indent=4)
 
     # Load image mapping data
     try:
@@ -249,13 +277,13 @@ if __name__ == "__main__":
         print("Warning: cars_images.csv not found. Proceeding without image URLs.", flush=True)
         image_map = None
 
-    # 5. Evaluate model predictions
-    print("Step 5: Evaluating model predictions...", flush=True)
+    # 6. Evaluate model predictions
+    print("\nStep 6: Evaluating model predictions...", flush=True)
     results_json = evaluate_predictions(model, X_test, y_test, image_map_df=image_map)
-    print("Step 5 complete.", flush=True)
+    print("Step 6 complete.", flush=True)
 
-    # 6. Predict price for a new car example
-    print("Step 6: Predicting price for a new car example...", flush=True)
+    # 7. Predict price for a new car example
+    print("\nStep 7: Predicting price for a new car example...", flush=True)
     new_car = {
         'id': 'new_car_001', # Example ID for the new car
         'brand': 'Toyota',
@@ -288,5 +316,5 @@ if __name__ == "__main__":
             prediction_output['evaluation'] = "Fair Price 👍"
     print(f"Conclusion: {prediction_output['evaluation']}", flush=True)
     print("Final JSON output for new car:", prediction_output)
-    print("Step 6 complete.", flush=True)
+    print("Step 7 complete.", flush=True)
     print("Script finished.", flush=True)
